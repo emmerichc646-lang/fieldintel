@@ -180,7 +180,7 @@ textarea{resize:none;}
   </div>
   <div style="font-size:13px;font-weight:800;text-transform:uppercase;letter-spacing:.18em;color:var(--text2);font-family:monospace;">SLMPD · FIELDINTEL</div>
   <div style="display:flex;align-items:center;gap:8px;">
-    <span id="livebadge" class="badge badge-dim">DEMO</span>
+    <span id="signalDot" style="display:inline-block;width:8px;height:8px;border-radius:50%;background:var(--green);flex-shrink:0;transition:background .3s;" title="Online"></span><span id="livebadge" class="badge badge-dim">DEMO</span>
     <button onclick="toggleDark()" class="btn btn-ghost btn-icon" style="width:36px;height:36px;font-size:16px;">🌙</button>
   </div>
 </div>
@@ -387,7 +387,7 @@ textarea{resize:none;}
     <div class="card">
       <div class="card-title"><span>ℹ️</span> Build Info</div>
       <div style="font-family:monospace;font-size:12px;color:var(--text3);line-height:2;">
-        <div>VERSION &nbsp; <span style="color:var(--text1);">FieldIntel v4.2</span></div>
+        <div>VERSION &nbsp; <span style="color:var(--text1);">FieldIntel v4.3</span></div>
         <div>BUILD &nbsp;&nbsp;&nbsp; <span style="color:var(--text1);">SLMPD Homicide Edition</span></div>
         <div>MODE &nbsp;&nbsp;&nbsp;&nbsp; <span id="buildMode" style="color:var(--amber);">DEMO / MOCK DATA</span></div>
         <div>ENGINE &nbsp;&nbsp; <span style="color:var(--text1);">Offline PWA · No Dependencies</span></div>
@@ -417,9 +417,34 @@ textarea{resize:none;}
 
 <script>
 // ══════════════════════════════════════════════
-//  FIELDINTEL v4.2 — SLMPD HOMICIDE EDITION
+//  FIELDINTEL v4.3 — SLMPD HOMICIDE EDITION
 //  All logic in one clean module — no deps
 // ══════════════════════════════════════════════
+
+// ── Signal Status Indicator ───────────────────
+(function(){
+  function updateSignalDot(){
+    var dot=document.getElementById('signalDot');
+    if(!dot) return;
+    dot.style.background=navigator.onLine?'var(--green)':'var(--red)';
+    dot.title=navigator.onLine?'Online':'Offline — manual mode active';
+  }
+  window.addEventListener('online',  updateSignalDot);
+  window.addEventListener('offline', function(){
+    updateSignalDot();
+    // Auto-notify if on interview tab
+    var rs=document.getElementById('recStatus');
+    if(rs && rs.textContent==='RECORDING'){
+      if(STATE&&STATE.speech){ STATE.speech.stop(); STATE.speech=null; }
+      rs.className='badge badge-amber';
+      rs.textContent='SIGNAL LOST — MANUAL MODE';
+      var ta=document.getElementById('transcript');
+      if(ta){ ta.style.borderColor='var(--amber)'; }
+    }
+  });
+  document.addEventListener('DOMContentLoaded', updateSignalDot);
+  setTimeout(updateSignalDot, 300);
+})();
 
 // ── PWA Manifest (inline) ────────────────────
 (function(){
@@ -597,16 +622,42 @@ function mockLookup(key) {
   return new Promise(function(resolve){ setTimeout(function(){ resolve(MOCK[key]); }, 1100); });
 }
 
+// ── VIN Cache (localStorage, max 50 entries) ─
+var VIN_CACHE_KEY='fi_vin_cache_v1';
+function vinCacheGet(vin){ try{ var c=JSON.parse(localStorage.getItem(VIN_CACHE_KEY)||'{}'); return c[vin]||null; }catch(e){return null;} }
+function vinCacheSet(vin,data){ try{ var c=JSON.parse(localStorage.getItem(VIN_CACHE_KEY)||'{}'); c[vin]=data; var keys=Object.keys(c); if(keys.length>50){ delete c[keys[0]]; } localStorage.setItem(VIN_CACHE_KEY,JSON.stringify(c)); }catch(e){} }
+
 async function liveLookup(key) {
+  // ── Offline: return cached result or clear offline notice ──
+  if(!isOnline()){
+    if(key==='PLATE'){
+      return {hit:false, text:"VEHICLE LOOKUP — OFFLINE\n──────────────────────────────────────\n⚠️  No signal detected.\nRecent plate lookups served from cache.\n\nEnter a previously decoded VIN to use\ncached results, or restore signal for\nlive NHTSA queries."};
+    } else {
+      return {hit:false, text:"IDENTITY CHECK — OFFLINE\n──────────────────────────────────────\n⚠️  No signal detected.\nDemo mode data available.\n\nRestore signal for live capability."};
+    }
+  }
+
   try {
     if(key==='PLATE'){
-      var r=await fetch('https://vpic.nhtsa.dot.gov/api/vehicles/GetModelsForMake/ford?format=json');
+      // Demo VIN for cache test — in Stage 2 this will be the scanned plate VIN
+      var demoVin='1HGBH41JXMN109186';
+      var cached=vinCacheGet(demoVin);
+      if(cached){
+        return {hit:false, text:"VEHICLE LOOKUP — CACHED ✓\n──────────────────────────────────────\n"+cached+"\n\nServed from local cache (no signal used)."};
+      }
+      var r=await fetch('https://vpic.nhtsa.dot.gov/api/vehicles/decodevinvalues/'+demoVin+'?format=json');
       var d=await r.json();
-      return {hit:false, text:"VEHICLE LOOKUP — LIVE MODE\n──────────────────────────────────────\nNHTSA PUBLIC DATABASE: Connected ✓\n\nFull plate-to-owner lookup requires\nREJIS credentials (Stage 2).\n\nContact SLMPD IT Division for your\nagency ORI and API access."};
+      var res=d.Results&&d.Results[0]?d.Results[0]:{};
+      var summary="MAKE  : "+(res.Make||'—')+"\nMODEL : "+(res.Model||'—')+"\nYEAR  : "+(res.ModelYear||'—')+"\nTYPE  : "+(res.VehicleType||'—')+"\nBODY  : "+(res.BodyClass||'—');
+      vinCacheSet(demoVin, summary);
+      return {hit:false, text:"VEHICLE LOOKUP — LIVE MODE\n──────────────────────────────────────\nNHTSA PUBLIC DATABASE: Connected ✓\nResult cached for offline use.\n\n"+summary+"\n\nFull plate-to-owner lookup requires\nREJIS credentials (Stage 2)."};
     } else {
       return {hit:false, text:"IDENTITY CHECK — LIVE MODE\n──────────────────────────────────────\nFull biometric matching requires\nNCIC/MULES credentials (Stage 2).\n\nSTAGE 1 LIVE CAPABILITIES:\n  • Vehicle records (NHTSA) ✓\n  • Address verification ✓\n  • Public OSINT search ✓\n\nContact SLMPD IT for REJIS terminal."};
     }
   } catch(e) {
+    // Network failed mid-request — serve cache if available
+    var fallback=vinCacheGet('1HGBH41JXMN109186');
+    if(fallback) return {hit:false, text:"VEHICLE LOOKUP — CACHE FALLBACK\n──────────────────────────────────────\n⚠️  Network error. Serving cached data.\n\n"+fallback};
     return {hit:false, text:"LIVE LOOKUP FAILED\n──────────────────────────────────────\nNetwork error: "+e.message+"\n\nSwitch to Demo mode to use offline mock data."};
   }
 }
@@ -683,8 +734,32 @@ function injectQ(q) {
 }
 
 // ── Recording ────────────────────────────────
+function isOnline() { return navigator.onLine; }
+
 function startRec() {
   STATE.transcript='';
+
+  // ── Offline detection ──────────────────────
+  if(!isOnline()){
+    document.getElementById('recStatus').className='badge badge-amber';
+    document.getElementById('recStatus').textContent='NO SIGNAL — MANUAL MODE';
+    // Switch textarea to editable manual input
+    var ta=document.getElementById('transcript');
+    ta.placeholder='⚠️ Voice transcription unavailable offline.\nType notes manually. Transcription resumes when signal returns.';
+    ta.style.borderColor='var(--amber)';
+    ta.focus();
+    // Monitor for signal return
+    var onlineHandler=function(){
+      ta.style.borderColor='';
+      ta.placeholder='Live transcription appears here. Use guide below to inject questions...';
+      document.getElementById('recStatus').className='badge badge-dim';
+      document.getElementById('recStatus').textContent='SIGNAL RESTORED — TAP RECORD';
+      window.removeEventListener('online', onlineHandler);
+    };
+    window.addEventListener('online', onlineHandler);
+    return;
+  }
+
   document.getElementById('recStatus').className='badge badge-red';
   document.getElementById('recStatus').textContent='RECORDING';
   navigator.mediaDevices.getUserMedia({audio:true})
@@ -709,7 +784,17 @@ function startRec() {
           document.getElementById('transcript').value=STATE.transcript+(interim?'['+interim+']':'');
           document.getElementById('transcript').scrollTop=9999;
         };
-        STATE.speech.onerror=function(e){ console.warn('SR:',e.error); };
+        STATE.speech.onerror=function(e){
+          console.warn('SR:',e.error);
+          if(e.error==='network'){
+            STATE.speech.stop(); STATE.speech=null;
+            document.getElementById('recStatus').className='badge badge-amber';
+            document.getElementById('recStatus').textContent='SIGNAL LOST — MANUAL MODE';
+            var ta2=document.getElementById('transcript');
+            ta2.style.borderColor='var(--amber)';
+            ta2.placeholder='Signal lost. Type notes manually. Transcription resumes when signal returns.';
+          }
+        };
         STATE.speech.start();
       }
     })
